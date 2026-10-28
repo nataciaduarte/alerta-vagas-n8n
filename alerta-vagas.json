@@ -1,0 +1,238 @@
+{
+  "name": "Alerta diário de vagas de estágio",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "bc6d6948-5aac-44cc-bb7c-a84cd665e5d0",
+      "name": "Executar manualmente",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 15
+            }
+          ]
+        }
+      },
+      "id": "e4631e11-00a8-41ff-9930-a0bc4dd17262",
+      "name": "Todo dia às 15h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://raw.githubusercontent.com/nataciaduarte/buscador-vagas/main/vagas.json",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "442b3ae3-d90d-467d-9c18-aad52f08c3cf",
+      "name": "Buscar vagas.json",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Recebe todas as vagas do vagas.json (uma vaga por item)\n// e separa as que foram coletadas nas últimas 24 horas.\nconst INSTRUCOES = \"Você classifica vagas de estágio para uma candidata. Perfil da candidata:\\n- Estudante de Tecnólogo em Inteligência Artificial e Machine Learning (1º semestre, conclusão prevista em 12/2028).\\n- Busca estágio em IA aplicada, automação, análise de dados ou machine learning. Aceita outras áreas só se o trabalho envolver dados, sistemas ou ferramentas digitais.\\n- Experiência anterior: conferência, controle de estoque e registro de dados em farmácia hospitalar; administração de negócio próprio por quase 9 anos.\\n- Usa agentes de IA na prática. Python e SQL em desenvolvimento. Excel básico. Não fala inglês.\\n- Mora no Rio de Janeiro. Aceita remoto, híbrido ou presencial no Centro do Rio ou em Duque de Caxias. Turnos de manhã e tarde.\\n\\nPara cada vaga recebida, atribua:\\n- \\\"alta\\\": estágio ligado a IA, dados, automação, sistemas ou tecnologia, sem exigência que ela claramente não cumpre.\\n- \\\"media\\\": estágio administrativo, de negócios ou operações em que dados ou ferramentas digitais têm papel relevante.\\n- \\\"baixa\\\": área sem relação (por exemplo direito, engenharia civil, saúde, vendas de balcão) ou exigência que ela não cumpre (inglês fluente, curso específico diferente do dela, local fora do Rio).\\n\\nRegras obrigatórias:\\n- Se a vaga exigir curso específico diferente do dela (por exemplo Administração, Engenharia, Psicologia, Direito, Arquitetura, mestrado ou curso técnico), classifique como \\\"baixa\\\", mesmo que as atividades envolvam dados. Exceção: se o curso exigido for próximo (Ciência de Dados, Computação, Sistemas, Estatística ou Matemática), use no máximo \\\"media\\\" e diga no motivo que o curso pedido é diferente.\\n- Se não for estágio e também não for vaga de tecnologia ou dados, classifique como \\\"baixa\\\".\\n- Se a descrição não trouxer atividades nem requisitos, use no máximo \\\"media\\\" e escreva \\\"descrição sem detalhes\\\" no motivo.\\n- Baseie-se apenas no título, empresa, local e descrição recebidos. Nunca deduza atividades, ferramentas ou requisitos que não estejam escritos.\\nResponda somente com JSON no formato {\\\"vagas\\\": [{\\\"id\\\": \\\"...\\\", \\\"aderencia\\\": \\\"alta|media|baixa\\\", \\\"motivo\\\": \\\"frase curta em português\\\"}]}, com uma entrada para cada vaga recebida e o id exatamente igual ao recebido.\";\n\nconst agora = Date.now();\nconst umDia = 24 * 60 * 60 * 1000;\n\nconst novas = $input.all()\n  .map(item => item.json)\n  .filter(v => v.coletada_em &&\n    agora - new Date(v.coletada_em.replace(' ', 'T') + 'Z').getTime() <= umDia);\nconst totalNovas = novas.length;\n\n// Regra fixa, sem IA: descarta vagas que pedem ensino médio ou curso técnico.\n// Esses casos são objetivos, e a IA errou neles nos testes.\nconst PEDE_OUTRO_NIVEL = /ensino m[eé]dio|(curso|n[ií]vel|est[aá]gio) t[eé]cnico|\\bt[eé]c\\b/i;\nconst descartadas = novas.filter(v => PEDE_OUTRO_NIVEL.test(v.titulo || ''));\nconst elegiveis = novas.filter(v => !PEDE_OUTRO_NIVEL.test(v.titulo || ''));\nnovas.length = 0;\nnovas.push(...elegiveis);\nnovas.splice(25); // até 25 vagas por dia, para caber no plano gratuito do Groq\n\nif (novas.length === 0) {\n  return [{ json: { total: 0, vagas: [] } }];\n}\n\n// Só o necessário vai para a IA, com a descrição encurtada\nconst lista = novas.map(v => ({\n  id: String(v.id),\n  titulo: v.titulo,\n  empresa: v.empresa,\n  local: v.local,\n  descricao: (v.descricao || '').slice(0, 200),\n}));\n\nreturn [{\n  json: {\n    total: novas.length,\n    total_novas: totalNovas,\n    descartadas_por_regra: descartadas.length,\n    vagas: novas,\n    requisicao: {\n      model: 'openai/gpt-oss-120b',\n      reasoning_effort: 'low',\n      temperature: 0,\n      response_format: { type: 'json_object' },\n      messages: [\n        { role: 'system', content: INSTRUCOES },\n        { role: 'user', content: JSON.stringify(lista) },\n      ],\n    },\n  },\n}];\n"
+      },
+      "id": "1136b4e1-a5fe-4b6f-b9a2-31279e394e2f",
+      "name": "Selecionar vagas novas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "04be9205-da39-418a-9614-19ea59da932d",
+              "leftValue": "={{ $json.total }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "7916c2d6-43c3-4c6b-9f53-dfabc43bdc44",
+      "name": "Tem vaga nova?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.requisicao) }}",
+        "options": {}
+      },
+      "id": "01040679-21d0-4c20-9c9b-77b6e1c94ed8",
+      "name": "Classificar com IA (Groq)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Junta a classificação da IA com os dados de cada vaga\n// e monta o texto do resumo em HTML, para o Telegram (Parse Mode: HTML).\nconst resposta = JSON.parse($json.choices[0].message.content);\nconst selecao = $('Selecionar vagas novas').first().json;\nconst vagas = selecao.vagas;\nconst porId = Object.fromEntries(vagas.map(v => [String(v.id), v]));\n\nconst classificadas = (resposta.vagas || [])\n  .filter(c => porId[String(c.id)])\n  .map(c => ({ ...porId[String(c.id)], aderencia: c.aderencia, motivo: c.motivo }));\n\nconst ordem = { alta: 0, media: 1, baixa: 2 };\nconst destaque = classificadas\n  .filter(v => v.aderencia === 'alta' || v.aderencia === 'media')\n  .sort((a, b) => ordem[a.aderencia] - ordem[b.aderencia]);\n\n// Escapa caracteres especiais do HTML para o Telegram não quebrar a mensagem\nconst esc = t => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n// Remove os parâmetros de rastreamento do link\nconst linkLimpo = l => String(l || '').split('?')[0];\n\nlet texto = `<b>Vagas novas nas últimas 24 horas:</b> ${selecao.total_novas}\\n`;\nif (selecao.descartadas_por_regra) {\n  texto += `Descartadas por regra fixa (ensino médio ou curso técnico): ${selecao.descartadas_por_regra}\\n`;\n}\ntexto += `Analisadas pela IA: ${vagas.length}\\n`;\ntexto += `<b>Combinam com seu perfil:</b> ${destaque.length}\\n\\n`;\nlet omitidas = 0;\nfor (const v of destaque) {\n  if (texto.length > 3600) { omitidas++; continue; } // limite de 4096 caracteres do Telegram\n  const nivel = v.aderencia === 'alta' ? 'ALTA' : 'MÉDIA';\n  texto += `<b>${nivel}</b> | ${esc(v.titulo)} | ${esc(v.empresa)}\\n`;\n  texto += `<i>${esc(v.motivo)}</i>\\n`;\n  texto += `<a href=\"${esc(linkLimpo(v.link))}\">Ver vaga</a>\\n\\n`;\n}\nif (omitidas) {\n  texto += `E mais ${omitidas} vaga(s) que não couberam nesta mensagem.\\n`;\n}\nif (destaque.length === 0) {\n  texto += 'Nenhuma vaga nova com boa aderência hoje.';\n}\n\nreturn [{ json: { texto, total_novas: selecao.total_novas, destaque: destaque.length, classificadas } }];\n"
+      },
+      "id": "837f2cf8-6a86-4ae4-919f-c30d60773c14",
+      "name": "Montar resumo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "SEU_CHAT_ID",
+        "text": "={{ $json.texto }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "4b939f59-2477-4abf-b310-d3ccf5bc8939",
+      "name": "Enviar no Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1440,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Executar manualmente": {
+      "main": [
+        [
+          {
+            "node": "Buscar vagas.json",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Todo dia às 15h": {
+      "main": [
+        [
+          {
+            "node": "Buscar vagas.json",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar vagas.json": {
+      "main": [
+        [
+          {
+            "node": "Selecionar vagas novas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Selecionar vagas novas": {
+      "main": [
+        [
+          {
+            "node": "Tem vaga nova?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tem vaga nova?": {
+      "main": [
+        [
+          {
+            "node": "Classificar com IA (Groq)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Classificar com IA (Groq)": {
+      "main": [
+        [
+          {
+            "node": "Montar resumo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar resumo": {
+      "main": [
+        [
+          {
+            "node": "Enviar no Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Sao_Paulo"
+  },
+  "pinData": {}
+}
